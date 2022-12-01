@@ -34,8 +34,8 @@ class Block:
 		return self.color.format(" ")
 
 class Player:
-	__num_players = 0
-	pass
+	NUMBER_OF_PLAYERS = 0
+
 
 class GuiPlayer(Player):
 	
@@ -73,7 +73,7 @@ class HumanPlayer(Player):
 	WIDTH = 9
 
 	def __init__(self, auto=False):
-		self.__who = Player.__num_players
+		self.__who = Player.NUMBER_OF_PLAYERS
 		self.__score = 0
 		self.auto = auto
 		self.state = State.I_REST
@@ -83,7 +83,7 @@ class HumanPlayer(Player):
 		self.facing_right = self.who == 0
 		self.color = Paint.fg_cyan if self.who == 0 else Paint.fg_red
 		self.update_body()
-		Player.__num_players += 1
+		Player.NUMBER_OF_PLAYERS += 1
 		self.pending_motions = deque()
 		self.pending_states = deque()
 
@@ -510,7 +510,7 @@ class Scene:
 			self.print_goodbye_screen()
 	
 	def graphical_loop(self):
-		elif Game.IS_STOPPED and not Game.IS_GRAPHICAL:
+		if Game.IS_PLAYING and not Game.IS_GRAPHICAL:
 			# We go back to the terminal loop
 			self.loop()
 		
