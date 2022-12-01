@@ -4,12 +4,9 @@ from time import sleep
 from pynput import keyboard
 from collections import deque
 from enum import Enum
-import threading
-import random
 import numpy as np
 import re 
 from math import sqrt
-import getopt
 import pickle
 
 class Move(Enum):
@@ -28,7 +25,7 @@ class State(Enum):
 class Block:
 	def __init__(self, pos_x):
 		self.pos_x = int(pos_x)
-		self.color = [Paint.bg_blue, Paint.bg_cyan, Paint.bg_yellow, Paint.bg_red, Paint.bg_green][random.randint(0,4)]
+		self.color = [Paint.bg_blue, Paint.bg_cyan, Paint.bg_yellow, Paint.bg_red, Paint.bg_green][np.random.randint(0,4)]
 
 	def __str__(self):
 		return self.color.format(" ")
@@ -303,8 +300,6 @@ class HumanPlayer(Player):
 	def pos_x(self, pos_x):
 		if 0 < pos_x < Scene.WIDTH:
 			self.__pos_x = pos_x
-		#self.__pos_x = max(0, pos_x)
-		#self.__pos_x = min(pos_x, Scene.WIDTH)
 
 	@property
 	def pos_y(self):
@@ -314,8 +309,6 @@ class HumanPlayer(Player):
 	def pos_y(self, pos_y):
 		if 0 < pos_y < Scene.HEIGHT:
 			self.__pos_y = pos_y
-		#self.__pos_y = max(0, pos_y)
-		#self.__pos_y = min(pos_y, Scene.HEIGHT)
 
 	@property
 	def who(self):
@@ -354,11 +347,11 @@ class HumanPlayer(Player):
 		self.__attacking_range  = max(1,param)
 
 	@property
-	def attacking_time(self):
+	def attacking_speed(self):
 		return self.__attacking_time
 
 	@attacking_range.setter
-	def attacking_time(self, param):
+	def attacking_speed(self, param):
 		self.__attacking_time = max(1,param)
 		
 	@property
@@ -402,8 +395,8 @@ class Paint:
 	#     %20length%20of%20a%20string%20depends%20on,utf-8%20is%20equal
 	#     %20to%20the%20bytes%20in%20String.
 	strip_ANSI_pattern = re.compile(r"""
-   	 \x1b     # literal ESC
-   	 \[       # literal [
+   	 \x1b     # the ESC character
+   	 \[       # the '[' character
    	 [;\d]*   # zero or more digits or semicolons
    	 [A-Za-z] # a letter
    	 """, re.VERBOSE).sub
@@ -414,8 +407,9 @@ class Scene:
 	GOLDEN_RATIO = 233/144
 	AIR = " "
 	default_scene = "___1______x__2______"
+	instance = None
 	
-	def __init__(self, scene_layout, fps=24):
+	def __init__(self, scene_layout, fps=2):
 		self.players = []
 		self.scene_layout = scene_layout
 		self.fps = fps
@@ -432,7 +426,6 @@ class Scene:
 					/len(self.scene_layout)))
 		self.blocks.astype(int)
 		self.blocks = np.array([Block(x) for x in self.blocks])
-		print(self.blocks)
 		self.collisions = np.array([
 			[
 			"       X       ",\
@@ -457,8 +450,8 @@ class Scene:
 			"  /_O  X        ",\
 			"   /`-/ \\  O_\\  ",\
 			"  | \\    \\-'\\   ",\
-			" /  /      / \\ ",\
-			"          |  \\"],
+			"/  /      / \\  ",\
+			"          |  \\ "],
 			[
 			"       /        ",\
 			"  _O  X         ",\
@@ -466,13 +459,17 @@ class Scene:
 			" | \\    \\-'_\\   ",\
 			"/  /       \ |_ "]
 			], dtype=object)
-		
 		self.swords = np.array([
 			[" _     |\\                            ",
 			 "[_[[[[[| |==========================>",
 			 "       |/                            "]])	
 		self.wrap_drawings()
 	
+	def get_instance(scene_file="default.ffscene"):
+		if Scene.instance is None:# or GameManager.instance.game.scene.scene_file != scene_file:
+			Scene.instance = Scene(scene_file)
+		return Scene.instance
+
 	def loop(self):	
 		if self.anew:
 			self.position_players()
@@ -483,9 +480,9 @@ class Scene:
 			self.clear_scene()
 			self.execute_commands()
 			if Game.PLAYER_SUCCEEDED > 0:
-				self.attack_succeeded_by(Game.PLAYER_SUCCEEDED-1)
+				self.attack_succeeded_by(Game.PLAYER_SUCCEEDED)
 			if Game.PLAYER_FAILED > 0:
-				self.attack_failed_by(Game.PLAYER_FAILED-1)
+				self.attack_failed_by(Game.PLAYER_FAILED)
 			self.print_game()
 			sleep(1/self.fps)
 			Game.IS_PLAYING = not Game.IS_PAUSED and not Game.IS_STOPPED
@@ -510,6 +507,7 @@ class Scene:
 			self.print_goodbye_screen()
 	
 	def graphical_loop(self):
+		self.root = None 
 		if Game.IS_PLAYING and not Game.IS_GRAPHICAL:
 			# We go back to the terminal loop
 			self.loop()
@@ -530,14 +528,14 @@ class Scene:
 			
 	def print_game(self):
 		"""
-		Print the game
+		Print the game. We use only numpy for this.
 		"""
 		width = Scene.WIDTH+self.players[0].WIDTH+self.players[1].WIDTH
 		# Print the scoreboard
 		topboard = ('-'*width).center(Scene.WINDOW_WIDTH)
 		topboard += Paint.bg_green.format(('Type <space> for the MENU, <esc> to QUIT.').center(Scene.WINDOW_WIDTH))
 		topboard += self.scoreboard
-		# If no close contact fight(collision) is going on...
+		# If no close contact fight(collision) is going on we print two players doing their own thing...
 		if len(self.pending) == 0:
 			player1 = self.players[0] if self.players[0].facing_right else self.players[1]
 			player2 = self.players[1] if self.players[0].facing_right else self.players[0]
@@ -555,20 +553,21 @@ class Scene:
 			if state == 'end':
 				self.position_players()
 				self.update_scoreboard(-1)
+			selected_collision = int((len(self.collisions)-1)*len(self.pending)/self.attack_show_duration)
 			playground = np.tile([Scene.AIR], (Scene.HEIGHT, self.players[self.attacked_player].pos_x))
-			selected_collision = int(len(self.collisions)*len(self.pending)/self.attack_show_duration)
-			selected_collision = min(selected_collision, len(self.collisions)-1)
 			playground = np.concatenate((playground, self.collisions[selected_collision].reshape(len(playground),1)), axis=1)
 			playground = np.concatenate((playground, np.tile([Scene.AIR], (Scene.HEIGHT, \
 					(Scene.WIDTH+len(self.collisions[selected_collision])-self.players[self.attacked_player].pos_x-1)))), axis=1)
-		#player1_on_ground = self.players[0].pos_y == self.players[0].height
-		#player2_on_ground = self.players[1].pos_y == self.players[1].height
+			selected_collision = int((len(self.collisions)-1)*len(self.pending)/self.attack_show_duration)
+			selected_collision %= len(self.collisions) 
+
 		for b in self.blocks:
 			if (self.players[0].pos_x-1 < b.pos_x < self.players[0].pos_x+self.players[0].width) or \
 				(self.players[1].pos_x-1 < b.pos_x < self.players[1].pos_x+self.players[1].width):
 				continue
 			playground[-1,b.pos_x] = str(b)
 		playground = [''.join(line).center(Scene.WINDOW_WIDTH) for line in playground]
+
 		# Let's add the following line to correct the misalignment at printing of colored lines. 
 		# In fact for colored lines the str.center(length...) would center the representation.
 		# But the printed version of colored strings is shorter than their representation, which is why their
@@ -613,40 +612,42 @@ class Scene:
 		size = os.get_terminal_size()
 		Scene.WIDTH = size.columns//2
 		Scene.HEIGHT = int(Scene.WIDTH/Scene.GOLDEN_RATIO/2)
-		Scene.WINDOW_WIDTH = size.columns# if size.columns%2==0 else size.columns-1
+		Scene.WINDOW_WIDTH = size.columns
 		
 	def add_player(self, player):
 		self.players.append(player)
 
 	def attack_succeeded_by(self, by_whom):
 		Game.PLAYER_SUCCEEDED = 0
-		random.shuffle(self.collisions) 
-		print(self.collisions)
+		by_whom -= 1
 		# by_whom is equal to 2 when and only when both players have updated the Game.PLAYER_SUCCEEDED attribute
 		# which means that they both succeeded an attack simultaneously. In this case no point is 
 		# given to any player. Otherwise, we give one point to the one who succeeded (player with
 		# index by_whom).
 		if by_whom == 0 or by_whom == 1:
 			self.players[by_whom].score += 1
-		self.attacked_player = -2 if by_whom > 1 else 1-by_whom
+		self.attacked_player = 0 if by_whom > 1 else 1-by_whom
 		self.pending.extend(['success']*self.attack_show_duration+['end'])
+		print("\a")
 		for player in self.players:
 			player.pending_motions.clear()
 			player.pending_states.clear()
 		self.update_scoreboard(by_whom)
 		self.collisions = self.success_collisions
+		np.random.shuffle(self.collisions) 
 
 	def attack_failed_by(self, by_whom):
 		Game.PLAYER_FAILED = 0
-		random.shuffle(self.collisions) 
-		print(self.collisions)
 		self.pending.extend(['failure']*self.attack_show_duration+['end'])
 		self.attacked_player = -1
+		print("\a")
+		print("\a")
 		for player in self.players:
 			player.state = State.I_REST
 			player.pending_motions.clear()
 			player.pending_states.clear()
 		self.collisions = self.failure_collisions
+		np.random.shuffle(self.collisions) 
 	
 	def wrap_drawings(self, color=Paint.fg_green):
 		#We draw one thing facing a certain direction and find its mirror image
@@ -671,13 +672,9 @@ class Scene:
 			drawing = np.array([s.replace('#','<') for s in drawing])
 			drawing = np.array([s[::-1] for s in drawing])
 			return drawing
-		nb_collisions = len(self.collisions)
-		#for collision in self.collisions[:nb_collisions]:
-		#	print(self.collisions)
-		#	self.collisions = np.concatenate((self.collisions, [mirror_flip(collision)]), axis=0)
 		self.collisions = np.array([([Scene.AIR*len(c[0])] * (Scene.HEIGHT-len(c)))+c for c in self.collisions])
 		self.success_collisions = np.array([[Paint.fg_yellow.format(_) for _ in collision] for collision in self.collisions])	
-		self.failure_collisions = np.array([[_ for _ in collision] for collision in self.collisions])	
+		self.failure_collisions = np.array([[Paint.fg_light_gray.format(_) for _ in collision] for collision in self.collisions])	
 		self.swords = np.concatenate((self.swords, [[_ for _ in mirror_flip(self.swords[0])]]), axis=0)
 		self.swords = np.concatenate((self.swords, [[Paint.fg_cyan.format(_) for _ in self.swords[0]]]), axis=0)
 		self.swords = np.concatenate((self.swords, [[Paint.fg_red.format(_) for _ in self.swords[1]]]), axis=0)
@@ -688,7 +685,6 @@ class Scene:
 					* (Scene.WIDTH-2*HumanPlayer.WIDTH+2)\
 					/len(self.scene_layout))
 			player.pos_y = player.height
-
 
 	def update_scoreboard(self, by_whom=-1):
 		scores = "| "+str(self.players[0].score)+" | "+str(self.players[1].score) + " |"
@@ -712,7 +708,7 @@ class Scene:
 		scoreboard = (' '*((Scene.WINDOW_WIDTH-self.printed_length(scoreboard))//2))+scoreboard+(' '*((Scene.WINDOW_WIDTH-self.printed_length(scoreboard))//2))
 		p2 = (' '*((Scene.WINDOW_WIDTH-self.printed_length(p2))//2))+p2+(' '*((Scene.WINDOW_WIDTH-self.printed_length(p2))//2))
 		self.scoreboard = p1+scoreboard+p2
-		
+
 	def clear_scene(self):
 		if os.name == 'posix':
 			os.system('clear')
@@ -738,8 +734,7 @@ class Game:
 	PLAYER_SUCCEEDED = 0
 	PLAYER_FAILED = 0
 
-	def __init__(self, scene_file):
-		self.scene = self.set_scene(scene_file) 
+	def __init__(self):
 		Game.IS_INITIALIZED = True
 
 	def start(self):
@@ -779,29 +774,132 @@ class Game:
 		scene_layout = Scene.default_scene
 		with open(scene_file) as file:
 			scene_layout = file.readline().strip()
-		self.scene = Scene(scene_layout)
+		self.scene = Scene.get_instance(scene_layout)
 		return self.scene
 
 class GameManager:
 	instance = None
+	init_OK = True
+	help_string = """
+Hi, I am FancyFencing 1.0. Let me introduce myself...
+\x1b[42mHELP\033[00m (You called me with option --help)
+Usage: python3.9 main.py [-fps <frame_per_second>] [-option_i <arg_i_player_1> <arg_i_player_2>]...
 
-	def __init__(self, scene_file="default.ffscene", gui=False):
-		self.gui = gui
-		self.game = Game(scene_file)
-	
-	def get_instance(self, scene_file="default.ffscene", gui=False):
-		if GameManager.instance is None or GameManager.instance.scene_file != scene_file:
-			GameManager.instance = GameManager(scene_file, gui)
+List of required arguments:
+	--fps	<frame_per_second>	This controls the speed of the game.
+	--ms	<ms1> <ms2>		[movement_speed] Player1 uses <ms1>  frames to move in all four directions, Player2 uses <ms2> frames to move in all four directions
+	--as 	<as1> <as2>		[attacking_speed] Player1 uses <as1> frames for his attacks to become effective, Player2 needs <as2> frames
+	--ar 	<ar1> <ar2>		[attacking_range] Player1 needs his attacker to be as close as <ar1> from him in order for his (Player1) attacks to be effective
+							  Player2 needs his attacker to be as close as <ar2> from him in order for his attacks to be effective
+	--bt 	<bt1> <bt2>		[blocking_time] Player1's blockage last for <bt1> frames, while <bt2> is the blocking time for Player2 
+	--scene <path_to_ff.scene.file> A valid .ffscene file.
+
+Optional argument (used alone):
+	--help				For this help message
+
+Here are two valid examples:
+\033[93m python3.9 main.py --fps 24 --ms 9 8 --as 12 13 --ar 8 15 --bt 7 9 --scene default.ffscene\033[00m
+\033[93m python3.9 main.py --help \033[00m
+
+Version 1.0
+Dec 1, 2022, 	Comlan Amouwotor
+
+Happy Fencing!
+
+"""
+
+	def __init__(self):
+		self.game = Game()
+		self.params = dict()
+
+	def get_instance():
+		if GameManager.instance is None:
+			GameManager.instance = GameManager()
 		return GameManager.instance
 
-	def all_good(self):
-		return True
-		
+	def get_params_from_inputs(self):
+		argv = sys.argv[1:]
+		if len(argv) != 16:
+			print("Not enough arguments!")
+			GameManager.init_OK = False
+			print(GameManager.help_string)
+			return
+		if len(argv) == 1 and argv[0] != '--help':
+			GameManager.init_OK = False
+			print(GameManager.help_string)
+			return
+		try:
+			i=0
+			while i < len(argv):
+				if argv[i] not in {'--help', '--fps', '--ms', '--as', '--ar', '--bt', '--scene'}:
+					print(f"argument {arg[i]} not supported")
+					GameManager.init_OK = False
+					print(GameManager.help_string)
+					return		
+				if argv[i] == '--help':
+					GameManager.init_OK = False
+					print(GameManager.help_string)
+					return
+				elif argv[i] == '--fps':
+					self.params['--fps'] = int(argv[i+1])
+					i+=2
+				elif argv[i] == '--ms':
+					self.params['--ms'] = int(argv[i+1]), int(argv[i+2])
+					i+=3
+				elif argv[i] == '--as':
+					self.params['--as'] = int(argv[i+1]), int(argv[i+2])
+					i+=3
+				elif argv[i] == '--ar':
+					self.params['--ar'] = int(argv[i+1]), int(argv[i+2])
+					i+=3
+				elif argv[i] == '--bt':
+					self.params['--bt'] = int(argv[i+1]), int(argv[i+2])
+					i+=3
+				elif argv[i] == '--scene':
+					GameManager.instance.set_scene(argv[i+1])
+					i+=2
+		except Exception as e:
+			print(f"\x1b[41m {e}\033[00m")
+			GameManager.init_OK = False
+			print(GameManager.help_string)
+
+		if len(self.params) == 5:
+			self.build_players()
+		else:
+			GameManager.init_OK = False
+			print(GameManager.help_string)	
+
+	def build_players(self):
+		if GameManager.init_OK:
+			gameManager = GameManager.get_instance()
+			player1 = gameManager.player()
+			player2 = gameManager.player()
+			
+			for arg, val in self.params.items():
+				if arg == '--fps':
+					self.game.scene.fps = val
+				elif arg == '--ms':
+					player1.movement_speed = val[0]
+					player2.movement_speed = val[1]
+				elif arg == '--as':
+					player1.attacking_speed = val[0]
+					player2.attacking_speed = val[1]
+				elif arg == '--ar':
+					player1.attacking_range = val[0]
+					player2.attacking_range = val[1]
+				elif arg == '--bt':
+					player1.blocking_time = val[0]
+					player2.blocking_time = val[1]
+ 
 	def start(self):
-		listener = keyboard.Listener(on_press=self.key_pressed, suppress=True)
-		listener.start()
-		self.game.start()
-	
+		self.get_params_from_inputs()
+		if GameManager.init_OK:
+			listener = keyboard.Listener(on_press=self.key_pressed, suppress=True)
+			listener.start()
+			self.game.start()
+		else:
+			print("Maybe next time... :)")	
+
 	def pause(self):
 		self.game.pause()
 	
@@ -812,19 +910,22 @@ class GameManager:
 		self.game.set_scene(scene_file)
 	
 	def save_game(self):
-		print("save game")
 		# Serialization
-		with open("game.pickle", "wb") as outfile:
-	    		pickle.dump(GameManager.instance, outfile)
-		print("Written object", self)
+		with open(".game.pickle", "wb") as outfile:
+			pickle.dump(GameManager.instance, outfile)
+			print("\x1b[42m Game saved successfully! \033[00")
 
 	def load_game(self):
-		print("loading game")
 		# Deserialization
-		with open("game.pickle", "rb") as infile:
-			GameManager.instance = pickle.load(infile)
+		with open(".game.pickle", "rb") as infile:
+			loaded = pickle.load(infile)
+			if not loaded:
+				print("\x1b[41m No saved game found in file ./game.pickle!\033[00m")
+				return
+			else:
+				print("\x1b[42m Game loaed successfully! You can see after leaving pause mode.\033[00")
+			GameManager.instance = loaded
 			self.game.scene.players = GameManager.instance.game.scene.players
-		print("Reconstructed object", self)
 
 	def key_pressed(self, key):
 		key = str(key)
